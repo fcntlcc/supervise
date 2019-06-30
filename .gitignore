@@ -1,3 +1,6 @@
+# the targets
+_target_/
+
 # Prerequisites
 *.d
 
