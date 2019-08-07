@@ -1,10 +1,10 @@
-CFLAGS=-g -O3 -std=c18 -DNDEBUG
+CFLAGS=-g -O3 -DNDEBUG -std=c99
 CC=gcc
 
 all : supervise
 
 supervise : supervise.c
-	${CC} ${CFLAGS} supervise.c -o supervise -lrt
+	${CC} ${CFLAGS} supervise.c -o supervise
 	mkdir -p _target_
 	mv -f supervise _target_/
 
