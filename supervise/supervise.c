@@ -8,6 +8,7 @@
  *
  */
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -61,6 +62,7 @@ struct supervise_control_info_t {
      */
     const char *application_stderr_file;
 
+    int supervise_pid_fd;
     int supervise_log_fd;
     int application_stdout_fd;
     int application_stderr_fd;
@@ -108,11 +110,13 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
         const char *app, char *const argv[]);
 
 /** 以子进程执行 */
-static pid_t exec_as_child(struct supervise_control_info_t *ctl_info,
-        const char *cmd, char *const argv[]);
+static pid_t exec_as_child(const char *cmd, char *const argv[]);
 
 /** 处理信号, 状态维护 */
 static void alarm_signal_handle(int sig);
+
+/** 更新supervise pid文件, 维持文件锁 */
+static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info);
 
 /** 读取配置: 字符串类型 */
 static int init_read_str_conf_from_environment(const char **conf, 
@@ -122,14 +126,17 @@ static int init_read_str_conf_from_environment(const char **conf,
 static int init_read_int_conf_from_environment(int *conf,
         const char *conf_name, int default_value);
 
+/** 检查应用是否存在, 是否可执行 **/
+static int check_executable(const char *path);
+
 /** 打开文件 */
-static int open_file(struct supervise_control_info_t *ctl_info, const char *filename);
+static int open_file(const char *filename);
 
 /** 日志打印 */
 static int print_log_func(struct supervise_control_info_t *ctl_info, 
         const char* filename, int line, const char *format, ...);
 
-#define print_log(ctl_info, format, ...) print_log_func(ctl_info, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define print_log(format, ...) print_log_func(&g_control, __FILE__, __LINE__, format, ##__VA_ARGS__)
 
 /****************************************************************************/
 
@@ -141,6 +148,7 @@ static int init_supervise_control_info(struct supervise_control_info_t *ctl_info
     ctl_info->restart_limit = -1;
     
     // 重置fd
+    ctl_info->supervise_pid_fd = -1;
     ctl_info->supervise_log_fd = STDERR_FILENO;
     ctl_info->application_stdout_fd = -1;
     ctl_info->application_stderr_fd = -1;
@@ -159,7 +167,7 @@ static int init_supervise_control_info(struct supervise_control_info_t *ctl_info
 }
 
 static int init_supervise_logs(struct supervise_control_info_t *ctl_info) {
-    ctl_info->supervise_log_fd = open_file(ctl_info, ctl_info->supervise_log_file);
+    ctl_info->supervise_log_fd = open_file(ctl_info->supervise_log_file);
     
     return 0;
 }
@@ -170,7 +178,7 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     ctl_info->supervise_pid = getpid();
     switch (pid) {
     case -1:
-        print_log(ctl_info, "Fail on fork() 1.");
+        print_log("Fail on fork() 1.");
         return 1;
     case 0:
         break;    // child
@@ -181,7 +189,7 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     // session leader
     pid_t sid = setsid();
     if (sid < 0) {
-        print_log(ctl_info, "Fail to be session leader.");
+        print_log("Fail to be session leader.");
         return 2;
     }
 
@@ -190,7 +198,7 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     ctl_info->supervise_pid = getpid();
     switch (pid) {
     case -1:
-        print_log(ctl_info, "Fail on fork() 2.");
+        print_log("Fail on fork() 2.");
         return 3;
     case 0:
         break; // child
@@ -202,7 +210,7 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
-    int fd = open_file(ctl_info, "/dev/null");
+    int fd = open_file("/dev/null");
     if (fd != -1) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
@@ -224,10 +232,15 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
             //TODO: hook restart
         }
 
-        ctl_info->application_pid = exec_as_child(ctl_info, app, argv);
+        if (check_executable(app) < 0) {
+            print_log("Supervise is not going to continue. Exit.");
+            return -1;
+        }
+
+        ctl_info->application_pid = exec_as_child(app, argv);
         // TODO: update pid file
 
-        print_log(ctl_info, "start new application instance. [pid: %d]", ctl_info->application_pid);
+        print_log("start new application instance. [pid: %d]", ctl_info->application_pid);
 
         do {
             app_stat = 0;
@@ -235,6 +248,7 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
         } while (! ( WIFEXITED(app_stat) || WIFSIGNALED(app_stat) ) );
 
         // TODO: exit status
+        
     }
 
     //TODO: hook restart limit
@@ -242,12 +256,11 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
     return 0;
 }
 
-static pid_t exec_as_child(struct supervise_control_info_t *ctl_info,
-        const char *cmd, char *const argv[]) {
+static pid_t exec_as_child(const char *cmd, char *const argv[]) {
     pid_t pid = fork();
     switch (pid) {
     case -1:
-        print_log(ctl_info, "Fail to fork() to exec [%s] [err: %d, %s]", cmd, errno, strerror(errno));
+        print_log("Fail to fork() to exec [%s] [err: %d, %s]", cmd, errno, strerror(errno));
         return -1;
     case 0:
         if (argv) {
@@ -264,10 +277,46 @@ static pid_t exec_as_child(struct supervise_control_info_t *ctl_info,
 
 static void alarm_signal_handle(int sig) {
     if (sig == SIGALRM) {
-        print_log(&g_control, "alarm sig handle.");
+        print_log("alarm sig handle.");
+        lock_and_update_supervise_pid_file(&g_control);
         //TODO
         alarm(10);
     }
+}
+
+static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info) {
+    if (ctl_info->supervise_pid_fd == -1) {
+        ctl_info->supervise_pid_fd = open_file(ctl_info->supervise_pid_file);
+    }
+
+    if (ctl_info->supervise_pid_fd == -1) {
+        return -1;
+    }
+
+    // TODO: check if moved
+
+    // check lock
+    struct flock lock;
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = 0;
+    lock.l_len = 1;
+    lock.l_pid = -1;
+
+    int r = fcntl(ctl_info->supervise_pid_fd, F_SETLK, &lock);
+    if (r == -1) {
+        print_log("[%s] is locked by other process!  [%d, %s]", 
+                ctl_info->supervise_pid_file, errno, strerror(errno));
+        return -2;
+    }
+
+    // update pid
+    char pidstr[64];
+    int nbytes = snprintf(pidstr, sizeof(pidstr), "%d", ctl_info->supervise_pid);
+    ftruncate(ctl_info->supervise_pid_fd, 0);
+    write(ctl_info->supervise_pid_fd, pidstr, nbytes);
+    
+    return 1;
 }
 
 static int init_read_str_conf_from_environment(const char **conf, 
@@ -297,7 +346,41 @@ static int init_read_int_conf_from_environment(int *conf,
     return 0;
 }
 
-static int open_file(struct supervise_control_info_t *ctl_info, const char *filename) {
+static int check_executable(const char *path) {
+    if (path == NULL) {
+        return -1;
+    }
+
+    struct stat file_info;
+    int r = stat(path, &file_info);
+
+    if (r != 0) {
+        print_log("check error [%s], [%d: %s]", path, errno, strerror(errno) );
+        return -2;
+    }
+
+    if (!S_ISREG(file_info.st_mode) ) {
+        print_log("[%s] is not a regular file.", path);
+        return -3;
+    }
+
+    if ( (S_IXUSR & file_info.st_mode) && (geteuid() == file_info.st_uid) ) {
+        return 1;
+    }
+
+    if ( (S_IXGRP & file_info.st_mode) && (getegid() == file_info.st_gid) ) {
+        return 2;
+    }
+
+    if ( (S_IXOTH & file_info.st_mode) ) {
+        return 3;
+    }
+
+    print_log("[%s] is not an executable file.", path);
+    return -4;
+}
+
+static int open_file(const char *filename) {
     if (filename == NULL) {
         return -1;
     }
@@ -317,7 +400,7 @@ static int open_file(struct supervise_control_info_t *ctl_info, const char *file
     int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 
     if (fd == -1) {
-        print_log(ctl_info, "Fail to open file [%s] [err: %d, %s]", filename, errno, strerror(errno) );
+        print_log("Fail to open file [%s] [err: %d, %s]", filename, errno, strerror(errno) );
     }
 
     return fd;
@@ -366,24 +449,28 @@ int main(int argc, char *argv[]) {
     }
 
     if (0 != init_supervise_control_info(&g_control) ) {
-        print_log(&g_control, "Fail to initialize the control info.");
+        print_log("Fail to initialize the control info.");
         return -2;
     }
 
     // 初始化日志
     init_supervise_logs(&g_control);
-    print_log(&g_control, "supervise started.");
+    print_log("supervise started.");
     
     // 非前台模式, 守护进程化
     if (g_control.option_foreground_supervise == 0) {
-        print_log(&g_control, "daemon mode.");
+        print_log("daemon mode.");
         supervise_daemonize(&g_control);
-        print_log(&g_control, "supervise daemon started.");
+        print_log("supervise daemon started.");
     } else {
-        print_log(&g_control, "foreground mode.");
+        print_log("foreground mode.");
     }
 
-    // TODO: 记录pid并加锁
+    // 记录supervise pid并加锁
+    if (lock_and_update_supervise_pid_file(&g_control) < 0) {
+        print_log("Fail to update pid file. Exit.");
+        return -3;
+    }
 
     // TODO: 注册周期信号, 处理文件被意外删除的场景
     signal(SIGALRM, alarm_signal_handle);
