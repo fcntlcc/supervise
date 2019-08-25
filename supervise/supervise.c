@@ -217,14 +217,15 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     }
 
     // fd's
+    int fd = open_file("/dev/null");
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
-    int fd = open_file("/dev/null");
     if (fd != -1) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
         dup2(fd, STDERR_FILENO);
+        close(fd);
     }
 
     return 0;
