@@ -66,6 +66,7 @@ struct supervise_control_info_t {
 
     int supervise_pid_fd;
     int supervise_log_fd;
+    int application_pid_fd;
     int application_stdout_fd;
     int application_stderr_fd;
 
@@ -114,11 +115,17 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
 /** 以子进程执行 */
 static pid_t exec_as_child(const char *cmd, char *const argv[]);
 
+/** 执行hook **/
+static int run_hook(const char *hook);
+
 /** 处理信号, 状态维护 */
 static void alarm_signal_handle(int sig);
 
 /** 更新supervise pid文件, 维持文件锁 */
 static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info);
+
+/** 更新application pid文件*/
+static int update_application_pid_file(struct supervise_control_info_t *ctl_info, int force_update);
 
 /** 读取配置: 字符串类型 */
 static int init_read_str_conf_from_environment(const char **conf, 
@@ -152,13 +159,14 @@ static int init_supervise_control_info(struct supervise_control_info_t *ctl_info
     // 重置fd
     ctl_info->supervise_pid_fd = -1;
     ctl_info->supervise_log_fd = STDERR_FILENO;
+    ctl_info->application_pid_fd = -1;
     ctl_info->application_stdout_fd = -1;
     ctl_info->application_stderr_fd = -1;
 
     // 初始化配置
     init_read_str_conf_from_environment(&ctl_info->supervise_pid_file, "SUPCONF_SUPERVISE_PID_FILE", "./supervise.pid");
     init_read_str_conf_from_environment(&ctl_info->supervise_log_file, "SUPCONF_SUPERVISE_LOG_FILE", "./supervise.log");
-    init_read_str_conf_from_environment(&ctl_info->application_pid_file, "SUPCONF_APPLICATION_PID_FILE", "./supervise.pid");
+    init_read_str_conf_from_environment(&ctl_info->application_pid_file, "SUPCONF_APPLICATION_PID_FILE", "./application.pid");
     init_read_str_conf_from_environment(&ctl_info->application_stdout_file, "SUPCONF_APPLICATION_STDOUT_FILE", "/dev/null");
     init_read_str_conf_from_environment(&ctl_info->application_stderr_file, "SUPCONF_APPLICATION_STDERR_FILE", "/dev/null");
     init_read_int_conf_from_environment(&ctl_info->option_foreground_supervise, "SUPCONF_FOREGROUND_SUPERVISE", 0);
@@ -231,7 +239,7 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
          ++ctl_info->restart_count) {
 
         if (ctl_info->restart_count > 0) {
-            //TODO: hook restart
+            run_hook(ctl_info->hook_before_restart);
         }
 
         if (check_executable(app) < 0) {
@@ -240,7 +248,7 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
         }
 
         ctl_info->application_pid = exec_as_child(app, argv);
-        // TODO: update pid file
+        update_application_pid_file(ctl_info, 1);
 
         print_log("start new application instance. [pid: %d]", ctl_info->application_pid);
 
@@ -248,12 +256,9 @@ static int supvervise_on_application(struct supervise_control_info_t *ctl_info,
             app_stat = 0;
             waitpid(ctl_info->application_pid, &app_stat, 0);
         } while (! ( WIFEXITED(app_stat) || WIFSIGNALED(app_stat) ) );
-
-        // TODO: exit status
-        
     }
 
-    //TODO: hook restart limit
+    run_hook(ctl_info->hook_reach_restart_limit);
 
     return 0;
 }
@@ -277,25 +282,57 @@ static pid_t exec_as_child(const char *cmd, char *const argv[]) {
     return pid;
 }
 
+static int run_hook(const char *hook) {
+    int hook_stat = 0;
+
+    if (hook == NULL) {
+        return 0;
+    }
+
+    pid_t pid = exec_as_child(hook, NULL);
+    if (pid != -1) {
+        do {
+            hook_stat = 0;
+            waitpid(pid, &hook_stat, 0);
+        } while (! ( WIFEXITED(hook_stat) || WIFSIGNALED(hook_stat) ) );
+    }
+
+    return 1;
+}
+
 static void alarm_signal_handle(int sig) {
     if (sig == SIGALRM) {
-        print_log("alarm sig handle.");
         lock_and_update_supervise_pid_file(&g_control);
-        //TODO
-        alarm(10);
+        update_application_pid_file(&g_control, 0);
+        alarm(3);
     }
 }
 
 static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info) {
+    int r = 0;
+
     if (ctl_info->supervise_pid_fd == -1) {
         ctl_info->supervise_pid_fd = open_file(ctl_info->supervise_pid_file);
+        if (ctl_info->supervise_pid_fd == -1) {
+            return -1;
+        }
+
+        // update pid
+        char pidstr[64];
+        int nbytes = snprintf(pidstr, sizeof(pidstr), "%d", ctl_info->supervise_pid);
+        ftruncate(ctl_info->supervise_pid_fd, 0);
+        write(ctl_info->supervise_pid_fd, pidstr, nbytes);
     }
 
-    if (ctl_info->supervise_pid_fd == -1) {
-        return -1;
+    // check if removed
+    struct stat file_info;
+    r = fstat(ctl_info->supervise_pid_fd, &file_info);
+    if (r == 0 && file_info.st_nlink == 0) {
+        print_log("Pid file [%s] is removed, try to recreate.", ctl_info->supervise_pid_file);
+        close(ctl_info->supervise_pid_fd);
+        ctl_info->supervise_pid_fd = -1;
+        return lock_and_update_supervise_pid_file(ctl_info);
     }
-
-    // TODO: check if moved
 
     // check lock
     struct flock lock;
@@ -305,19 +342,46 @@ static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *c
     lock.l_len = 1;
     lock.l_pid = -1;
 
-    int r = fcntl(ctl_info->supervise_pid_fd, F_SETLK, &lock);
+    r = fcntl(ctl_info->supervise_pid_fd, F_SETLK, &lock);
     if (r == -1) {
-        print_log("[%s] is locked by other process!  [%d, %s]", 
+        print_log("[%s] is locked by another process!  [%d, %s]", 
                 ctl_info->supervise_pid_file, errno, strerror(errno));
         return -2;
     }
+   
+    return 0;
+}
+
+static int update_application_pid_file(struct supervise_control_info_t *ctl_info, int force_update) {
+    int r = 0;
+
+    if (ctl_info->application_pid_fd == -1) {
+        ctl_info->application_pid_fd = open_file(ctl_info->application_pid_file);
+        force_update = 1;
+    }
+
+    if (ctl_info->application_pid_fd == -1) {
+        return -1;
+    }
+
+    // check if removed
+    struct stat file_info;
+    r = fstat(ctl_info->application_pid_fd, &file_info);
+    if (r == 0 && file_info.st_nlink == 0) {
+        print_log("Pid file [%s] is removed, try to recreate.", ctl_info->application_pid_file);
+        close(ctl_info->application_pid_fd);
+        ctl_info->application_pid_fd = -1;
+        return update_application_pid_file(ctl_info, 1);
+    }
 
     // update pid
-    char pidstr[64];
-    int nbytes = snprintf(pidstr, sizeof(pidstr), "%d", ctl_info->supervise_pid);
-    ftruncate(ctl_info->supervise_pid_fd, 0);
-    write(ctl_info->supervise_pid_fd, pidstr, nbytes);
-    
+    if (force_update) {
+        char pidstr[64];
+        int nbytes = snprintf(pidstr, sizeof(pidstr), "%d", ctl_info->application_pid);
+        ftruncate(ctl_info->application_pid_fd, 0);
+        write(ctl_info->application_pid_fd, pidstr, nbytes);
+    }
+
     return 1;
 }
 
@@ -447,6 +511,7 @@ static int print_log_func(struct supervise_control_info_t *ctl_info,
 /****************************************************************************/
 int main(int argc, char *argv[]) {
     if (argc < 2) {
+        fprintf(stderr, "Usage: %s <path to application> [application arguments]\n", argv[0]);
         return -1;
     }
 
@@ -474,13 +539,15 @@ int main(int argc, char *argv[]) {
         return -3;
     }
 
-    // TODO: 注册周期信号, 处理文件被意外删除的场景
+    // 注册周期信号, 处理文件被意外删除的场景
     signal(SIGALRM, alarm_signal_handle);
-    alarm(10);
+    alarm(3);
 
     // 监控application执行
     int ret = supvervise_on_application(&g_control, argv[1], (argc > 2) ? &argv[1] : NULL);
     
+    print_log("supervise exit with ret: %d", ret);
+
     return ret;
 }
 
