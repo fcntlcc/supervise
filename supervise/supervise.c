@@ -109,7 +109,7 @@ static int init_supervise_logs(struct supervise_control_info_t *ctl_info);
 static int supervise_daemonize(struct supervise_control_info_t *ctl_info);
 
 /** 监控执行application */
-static int supvervise_on_application(struct supervise_control_info_t *ctl_info, 
+static int supervise_on_application(struct supervise_control_info_t *ctl_info, 
         const char *app, char *const argv[]);
 
 /** 以子进程执行 */
@@ -170,6 +170,7 @@ static int init_supervise_control_info(struct supervise_control_info_t *ctl_info
     init_read_str_conf_from_environment(&ctl_info->application_stdout_file, "SUPCONF_APPLICATION_STDOUT_FILE", "/dev/null");
     init_read_str_conf_from_environment(&ctl_info->application_stderr_file, "SUPCONF_APPLICATION_STDERR_FILE", "/dev/null");
     init_read_int_conf_from_environment(&ctl_info->option_foreground_supervise, "SUPCONF_FOREGROUND_SUPERVISE", 0);
+    init_read_int_conf_from_environment(&ctl_info->restart_limit, "SUPCONF_RESTART_LIMIT", -1);
     init_read_str_conf_from_environment(&ctl_info->hook_before_restart, "SUPCONF_HOOK_BEFORE_RESTART", NULL);
     init_read_str_conf_from_environment(&ctl_info->hook_reach_restart_limit, "SUPCONF_HOOK_REACH_RESTART_LIMIT", NULL);
 
@@ -231,7 +232,7 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
     return 0;
 }
 
-static int supvervise_on_application(struct supervise_control_info_t *ctl_info, 
+static int supervise_on_application(struct supervise_control_info_t *ctl_info, 
         const char *app, char *const argv[]) {
     int app_stat = 0;
 
@@ -545,7 +546,7 @@ int main(int argc, char *argv[]) {
     alarm(3);
 
     // 监控application执行
-    int ret = supvervise_on_application(&g_control, argv[1], (argc > 2) ? &argv[1] : NULL);
+    int ret = supervise_on_application(&g_control, argv[1], (argc > 2) ? &argv[1] : NULL);
     
     print_log("supervise exit with ret: %d", ret);
 

@@ -1,4 +1,4 @@
-CFLAGS=-g -O3 -DNDEBUG -std=gnu11
+CFLAGS=-g -Os -DNDEBUG -std=c11
 CC=gcc
 
 all : supervise
