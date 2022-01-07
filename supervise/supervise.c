@@ -67,8 +67,6 @@ struct supervise_control_info_t {
     int supervise_pid_fd;
     int supervise_log_fd;
     int application_pid_fd;
-    int application_stdout_fd;
-    int application_stderr_fd;
 
     /**
      * supervise自身是否在前台执行
@@ -113,7 +111,10 @@ static int supervise_on_application(struct supervise_control_info_t *ctl_info,
         const char *app, char *const argv[]);
 
 /** 以子进程执行 */
-static pid_t exec_as_child(const char *cmd, char *const argv[]);
+static pid_t exec_as_child(struct supervise_control_info_t *ctl_info, const char *cmd, char *const argv[]);
+
+/** 设置子进程的stdout和stderr */
+static void set_application_stdout_and_stderr(struct supervise_control_info_t *ctl_info);
 
 /** 执行hook **/
 static int run_hook(const char *hook);
@@ -160,8 +161,6 @@ static int init_supervise_control_info(struct supervise_control_info_t *ctl_info
     ctl_info->supervise_pid_fd = -1;
     ctl_info->supervise_log_fd = STDERR_FILENO;
     ctl_info->application_pid_fd = -1;
-    ctl_info->application_stdout_fd = -1;
-    ctl_info->application_stderr_fd = -1;
 
     // 初始化配置
     init_read_str_conf_from_environment(&ctl_info->supervise_pid_file, "SUPCONF_SUPERVISE_PID_FILE", "./supervise.pid");
@@ -219,9 +218,6 @@ static int supervise_daemonize(struct supervise_control_info_t *ctl_info) {
 
     // fd's
     int fd = open_file("/dev/null");
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
     if (fd != -1) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
@@ -249,7 +245,7 @@ static int supervise_on_application(struct supervise_control_info_t *ctl_info,
             return -1;
         }
 
-        ctl_info->application_pid = exec_as_child(app, argv);
+        ctl_info->application_pid = exec_as_child(ctl_info, app, argv);
         update_application_pid_file(ctl_info, 1);
 
         print_log("start new application instance. [pid: %d]", ctl_info->application_pid);
@@ -265,13 +261,16 @@ static int supervise_on_application(struct supervise_control_info_t *ctl_info,
     return 0;
 }
 
-static pid_t exec_as_child(const char *cmd, char *const argv[]) {
+static pid_t exec_as_child(struct supervise_control_info_t *ctl_info, const char *cmd, char *const argv[]) {
     pid_t pid = fork();
     switch (pid) {
     case -1:
         print_log("Fail to fork() to exec [%s] [err: %d, %s]", cmd, errno, strerror(errno));
         return -1;
     case 0:
+        if (ctl_info) {
+            set_application_stdout_and_stderr(ctl_info);
+        }
         if (argv) {
             execvp(cmd, argv);
         } else {
@@ -284,6 +283,24 @@ static pid_t exec_as_child(const char *cmd, char *const argv[]) {
     return pid;
 }
 
+static void set_application_stdout_and_stderr(struct supervise_control_info_t *ctl_info) {
+    int fd = open_file(ctl_info->application_stdout_file);
+    if (fd == -1) {
+        print_log("Fail to open [%s] as stdout", ctl_info->application_stdout_file);
+    } else {
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+
+    fd = open_file(ctl_info->application_stderr_file);
+    if (fd == -1) {
+        print_log("Fail to open [%s] as stderr", ctl_info->application_stderr_file);
+    } else {
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+}
+
 static int run_hook(const char *hook) {
     int hook_stat = 0;
 
@@ -291,7 +308,7 @@ static int run_hook(const char *hook) {
         return 0;
     }
 
-    pid_t pid = exec_as_child(hook, NULL);
+    pid_t pid = exec_as_child(NULL, hook, NULL);
     if (pid != -1) {
         do {
             hook_stat = 0;
