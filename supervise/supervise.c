@@ -122,6 +122,9 @@ static int run_hook(const char *hook);
 /** 处理信号, 状态维护 */
 static void alarm_signal_handle(int sig);
 
+/** 忽略信号 */
+static void ignore_signal_handle(int sig);
+
 /** 更新supervise pid文件, 维持文件锁 */
 static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info);
 
@@ -325,6 +328,10 @@ static void alarm_signal_handle(int sig) {
         update_application_pid_file(&g_control, 0);
         alarm(3);
     }
+}
+
+static void ignore_signal_handle(int sig) {
+    return ;
 }
 
 static int lock_and_update_supervise_pid_file(struct supervise_control_info_t *ctl_info) {
@@ -557,6 +564,13 @@ int main(int argc, char *argv[]) {
         print_log("Fail to update pid file. Exit.");
         return -3;
     }
+
+    // 忽略 SIGPIPE, SIGUSR1, SIGUSR2
+    signal(SIGTERM, ignore_signal_handle);
+    signal(SIGINT, ignore_signal_handle);
+    signal(SIGPIPE, ignore_signal_handle);
+    signal(SIGUSR1, ignore_signal_handle);
+    signal(SIGUSR2, ignore_signal_handle);
 
     // 注册周期信号, 处理文件被意外删除的场景
     signal(SIGALRM, alarm_signal_handle);
