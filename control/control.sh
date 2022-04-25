@@ -37,6 +37,15 @@ do_stop_supervise()
 
 }
 
+do_fetch_next() 
+{
+    echo "fetch: begin."
+    echo "NOT SUPPORTED NOW"
+    echo "fetch: end."
+
+    return 1
+}
+
 do_init() 
 {
     echo "init: begin."
@@ -201,6 +210,10 @@ op=$1
 shift 1
 
 case $op in
+(fetch) 
+    do_fetch_next $*
+    exit $?
+    ;;
 (init) 
     do_init $*
     exit $?
@@ -243,5 +256,5 @@ case $op in
     ;;
 esac
 
-echo "$op is not supported. (TIPS: Supported cmds: init update rollback start stop reload restart kill check test)"
+echo "$op is not supported. (TIPS: Supported cmds: init fetch update rollback start stop reload restart kill check test)"
 

@@ -1,0 +1,8 @@
+PID_FILE="$SCRIPT_PATH_ABS/application.pid"
+APP_PID=`cat $PID_FILE 2>/dev/null`
+SERVICE_BIN="./bin/nginx -p . -c conf/nginx.conf"
+SERVICE_START_CMD="$SERVICE_BIN"
+SERVICE_STOP_CMD="$SERVICE_BIN -s quit"
+SERVICE_RELOAD_CMD="$SERVICE_BIN -s reload"
+SERVICE_TEST_CMD="$SERVICE_BIN -t"
+SERVICE_LD_LIBRARY_PATH="./lib"
