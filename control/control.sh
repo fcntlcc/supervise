@@ -16,6 +16,7 @@ elif [ -e "$SCRIPT_PATH_ABS/conf/control.conf" ]; then
 fi
 
 export LD_LIBRARY_PATH="$SERVICE_LD_LIBRARY_PATH:$LD_LIBRARY_PATH"
+CMD_INIT="$SERVICE_INIT_CMD"
 CMD_START="./supervise $SERVICE_START_CMD"
 CMD_STOP="$SERVICE_STOP_CMD"
 CMD_RELOAD="$SERVICE_RELOAD_CMD"
@@ -49,7 +50,7 @@ do_fetch_next()
 do_init() 
 {
     echo "init: begin."
-    echo "NOT SUPPORTED NOW"
+    $CMD_INIT
     echo "init: end."
 
     return 1
