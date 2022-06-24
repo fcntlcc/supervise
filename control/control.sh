@@ -105,6 +105,17 @@ do_start()
     return 1
 }
 
+do_fstart()
+{
+    echo "fstart: begin."
+    rm -f "$SUPERVISE_PID_FILE"
+    rm -f "$PID_FILE"
+
+    do_start
+
+    echo "fstart: end."
+}
+
 do_stop() 
 {
     echo "stop: begin."
@@ -125,6 +136,7 @@ do_stop()
             ret=$?
             if [ $ret -eq 1 ] || [ $ret -eq 2 ]; then
                 echo "stop: succ end."
+                rm -f "$PID_FILE"
                 return 0
             fi
             sleep 3
@@ -161,7 +173,7 @@ do_check()
     echo -n "check: "
     pid=`cat $PID_FILE 2>/dev/null`
     if [ -z "$pid" ]; then
-        echo "fail end. $PID_FILE not found"
+        echo "process not found. (No PID File)"
         return 2
     elif [ -d "/proc/$pid" ]; then
         echo process $pid is running.
@@ -229,6 +241,10 @@ case $op in
     ;;
 (start) 
     do_start $*
+    exit $?
+    ;;
+(fstart)
+    do_fstart $*
     exit $?
     ;;
 (stop)
