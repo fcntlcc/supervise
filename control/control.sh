@@ -58,17 +58,45 @@ do_init()
 
 do_update() 
 {
-    echo "update: begin."
-    echo "NOT SUPPORTED NOW"
-    echo "update: end."
+    TMP_BIN_GZ="./bin.update.gz"
+    if [ "$1" == "debug" -a -n "$SERVICE_DEBUG_PACKAGE" ]; then
+        echo "update: download $SERVICE_DEBUG_PACKAGE"
+        curl -L -C - -o $TMP_BIN_GZ "$SERVICE_DEBUG_PACKAGE"
+    elif [ -n "$SERVICE_PACKAGE" ]; then
+        echo "update: download $SERVICE_PACKAGE"
+        curl -L -C - -o $TMP_BIN_GZ "$SERVICE_PACKAGE"
+    else
+        echo "update: no package"
+        echo "update: end."
+        return 0
+    fi
 
+    if [ "$?" == "0" ]; then 
+        echo "update: replace"
+        SAME=`md5sum "$SERVICE_BIN" "$SERVICE_BIN".prev | awk '{print $1}' | uniq | wc -l`
+        if [ "$SAME" != "1" -o ! -f "$SERVICE_BIN".prev ]; then
+            mv "$SERVICE_BIN" "$SERVICE_BIN".prev
+        fi
+        gunzip -c $TMP_BIN_GZ > "$SERVICE_BIN" && chmod +x "$SERVICE_BIN" && rm -f $TMP_BIN_GZ
+    else
+        echo "update: fail to download"
+    fi
+
+    echo "update: end."
     return 1
 }
 
 do_rollback() 
 {
     echo "rollback: begin."
-    echo "NOT SUPPORTED NOW"
+
+    if [ -f "$SERVICE_BIN".prev ]; then 
+        echo "rollback: replace"
+        rm -f "$SERVICE_BIN" && cp "$SERVICE_BIN".prev "$SERVICE_BIN" && chmod +x "$SERVICE_BIN"
+    else
+        echo "rollback: no previous binary found"
+    fi
+
     echo "rollback: end."
 
     return 1
