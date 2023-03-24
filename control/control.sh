@@ -58,6 +58,7 @@ do_init()
 
 do_update() 
 {
+	cd $SCRIPT_PATH_ABS
     TMP_BIN_GZ="./bin.update.gz"
     if [ "$1" == "debug" -a -n "$SERVICE_DEBUG_PACKAGE" ]; then
         echo "update: download $SERVICE_DEBUG_PACKAGE"
@@ -68,6 +69,7 @@ do_update()
     else
         echo "update: no package"
         echo "update: end."
+        cd - > /dev/null
         return 0
     fi
 
@@ -83,11 +85,13 @@ do_update()
     fi
 
     echo "update: end."
+    cd - > /dev/null
     return 1
 }
 
 do_rollback() 
 {
+	cd $SCRIPT_PATH_ABS
     echo "rollback: begin."
 
     if [ -f "$SERVICE_BIN".prev ]; then 
@@ -99,6 +103,7 @@ do_rollback()
 
     echo "rollback: end."
 
+    cd - > /dev/null
     return 1
 }
 
