@@ -80,6 +80,10 @@ do_update()
             mv "$SERVICE_BIN" "$SERVICE_BIN".prev
         fi
         gunzip -c $TMP_BIN_GZ > "$SERVICE_BIN" && chmod +x "$SERVICE_BIN" && rm -f $TMP_BIN_GZ
+        if [ "$?" != "0" ]; then
+            echo "fail to unpack, rollback"
+            cp "$SERVICE_BIN".prev "$SERVICE_BIN"
+        fi
     else
         echo "update: fail to download"
     fi
