@@ -78,6 +78,8 @@ do_update()
         SAME=`md5sum "$SERVICE_BIN" "$SERVICE_BIN".prev | awk '{print $1}' | uniq | wc -l`
         if [ "$SAME" != "1" -o ! -f "$SERVICE_BIN".prev ]; then
             mv "$SERVICE_BIN" "$SERVICE_BIN".prev
+        else
+            rm -f "$SERVICE_BIN"
         fi
         gunzip -c $TMP_BIN_GZ > "$SERVICE_BIN" && chmod +x "$SERVICE_BIN" && rm -f $TMP_BIN_GZ
         if [ "$?" != "0" ]; then
