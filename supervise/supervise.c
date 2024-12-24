@@ -249,6 +249,10 @@ static int supervise_on_application(struct supervise_control_info_t *ctl_info,
         }
 
         ctl_info->application_pid = exec_as_child(ctl_info, app, argv);
+        if (ctl_info->application_pid == 0) {
+            exit(-1);
+        }
+
         update_application_pid_file(ctl_info, 1);
 
         print_log("start new application instance. [pid: %d]", ctl_info->application_pid);
@@ -279,7 +283,9 @@ static pid_t exec_as_child(struct supervise_control_info_t *ctl_info, const char
         } else {
             execlp(cmd, cmd, NULL);
         }
-        break;
+
+        print_log("Fail to exec(%s), err:%d/%s", cmd, errno, strerror(errno));
+        return 0;
     default:
         break;
     }
@@ -312,6 +318,10 @@ static int run_hook(const char *hook) {
     }
 
     pid_t pid = exec_as_child(NULL, hook, NULL);
+    if (pid == 0) {
+        exit(-1);
+    }
+
     if (pid != -1) {
         do {
             hook_stat = 0;
